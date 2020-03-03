@@ -54,7 +54,7 @@ module BimTools
       end # def initialize
 
       def to_s()
-        return @vertices.join("\n") << "\n" << @polygons.join("\n")
+        return @vertices.join("\\n") << "\\n" << @polygons.join("\\n")
       end
     end # OBJ
   end # module IfcJson

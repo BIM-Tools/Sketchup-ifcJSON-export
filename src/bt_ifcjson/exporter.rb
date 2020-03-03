@@ -20,18 +20,39 @@
 
 module BimTools  
   module IfcJson
-    require File.join(PLUGIN_PATH, 'obj.rb')
-    require File.join(PLUGIN_PATH, 'IfcGloballyUniqueId.rb')
+    require File.join(PLUGIN_PATH, "obj.rb")
+    require File.join(PLUGIN_PATH, "IfcGloballyUniqueId.rb")
     class IfcJsonExporter
       attr_accessor :root_objects
       def initialize( entities )
-        @root_objects = Array.new
+        @geometry = Array.new
+        @root_objects = {
+          "header" => {
+            "file_description" => {
+              "description" => "ViewDefinition [CoordinationView]",
+              "implementation_level" => "2;1"
+            },
+            "file_name" => {
+              "name" => "7m900_tue_hello_wall_with_door.json",
+              "time_stamp" => "2020-02-22T11:10:04",
+              "author" => "",
+              "organization" => "",
+              "preprocessor_version" => "IFC-manager for SketchUp (ifcjson-3.1.0)",
+              "originating_system" => "SketchUp Pro 2020 (20.0.373)",
+              "authorization" => ""
+            },
+            "file_schema" => "IFC2X3"
+          },
+          "data" => []
+        }
         export_path = get_export_path()
   
         # only start export if path is valid
         unless export_path.nil?
-          @root_objects.concat( collect_objects( entities, Geom::Transformation.new() )[0] )
+          @root_objects["data"].concat( collect_objects( entities, Geom::Transformation.new() )[0] )
         end
+
+        @root_objects["data"].concat( @geometry  )
 
         to_file( export_path )
       end # def initialize
@@ -53,6 +74,11 @@ module BimTools
             end
             object_hash["GlobalId"] = guid.to_json()
 
+            # add volume if object is manifold
+            if entity.volume > 0
+              object_hash["Volume"] = entity.volume
+            end
+
             isDecomposedBy, child_faces = collect_objects(entity.definition.entities, transformation, guid.to_s)
 
             unless isDecomposedBy.empty?
@@ -62,7 +88,33 @@ module BimTools
             # only add representation if there are any faces
             if child_faces.length > 0
               obj = OBJ.new(child_faces, parent_transformation)
-              object_hash["Representation"] = obj.to_s
+              representation_guid = BimTools::IfcManager::IfcGloballyUniqueId.new().to_json
+              object_hash["Representations"] = [
+                {
+                  "Class": "ShapeRepresentation",
+                  "ref": representation_guid
+                }
+              ]
+              # {
+              #   "Class": "ProductDefinitionShape",
+              #   "Representations": [
+              #     {
+              #       "Class": "ShapeRepresentation",
+              #       "RepresentationIdentifier": "Body",
+              #       "RepresentationType": "OBJ",
+              #       "Items": [obj.to_s]
+              #     }
+              #   ]
+              # }
+
+              # add geometry as seperate objects at the end of the file
+              @geometry << {
+                "Class" => "ShapeRepresentation",
+                "GlobalId" => representation_guid,
+                "RepresentationIdentifier" => "Body",
+                "RepresentationType" => "OBJ",
+                "Items" => [obj.to_s]
+              }
             end
             child_objects << object_hash
           elsif entity.is_a?(Sketchup::Face)
