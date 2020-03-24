@@ -129,7 +129,7 @@ module BimTools
         definition = entity.definition
         ifc_type = definition.get_attribute "AppliedSchemaTypes", "IFC 2x3"
         if ifc_type
-          properties["Class"] = ifc_type
+          properties["Class"] = ifc_type[3..-1]
           if definition.attribute_dictionaries['IFC 2x3']
             if props_ifc = definition.attribute_dictionaries['IFC 2x3'].attribute_dictionaries
               props_ifc.each do |prop_dict|
