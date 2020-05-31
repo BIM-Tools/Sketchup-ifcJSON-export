@@ -25,24 +25,33 @@ module BimTools
     class IfcJsonExporter
       attr_accessor :root_objects
       def initialize( entities )
+        @id_objects = []
+        @ifc_objects = Array.new
         @geometry = Array.new
+
+        # get timestamp
+        time = Time.new
+        timestamp = time.strftime("%Y-%m-%dT%H:%M:%S")
+      
+        # get originating_system
+        originating_system = "SketchUp"
+        if Sketchup.is_pro?
+          originating_system = originating_system << " Pro"
+        end
+        number = Sketchup.version_number/100000000.floor
+        originating_system = originating_system << " 20" << number.to_s
+        originating_system = originating_system << " (" << Sketchup.version << ")"
+
+        # get preprosessor versions
+        preprocessor_version = "IFC-manager for SketchUp (#{VERSION})"
+
         @root_objects = {
-          "header" => {
-            "file_description" => {
-              "description" => "ViewDefinition [CoordinationView]",
-              "implementation_level" => "2;1"
-            },
-            "file_name" => {
-              "name" => "7m900_tue_hello_wall_with_door.json",
-              "time_stamp" => "2020-02-22T11:10:04",
-              "author" => "",
-              "organization" => "",
-              "preprocessor_version" => "IFC-manager for SketchUp (ifcjson-3.1.0)",
-              "originating_system" => "SketchUp Pro 2020 (20.0.373)",
-              "authorization" => ""
-            },
-            "file_schema" => "IFC2X3"
-          },
+          "type" => "ifcjson",
+          "schema" => "IFC.JSON5a",
+          "description" => "ViewDefinition [CoordinationView]",
+          "timeStamp" => timestamp,
+          "preprocessorVersion" => preprocessor_version,
+          "originatingSystem" => originating_system,
           "data" => []
         }
         export_path = get_export_path()
@@ -52,6 +61,7 @@ module BimTools
           @root_objects["data"].concat( collect_objects( entities, Geom::Transformation.new() )[0] )
         end
 
+        @root_objects["data"].concat( @ifc_objects  )
         @root_objects["data"].concat( @geometry  )
 
         to_file( export_path )
@@ -68,30 +78,30 @@ module BimTools
             object_hash.merge! get_properties(entity)
 
             # create unique guid
-            guid = BimTools::IfcManager::IfcGloballyUniqueId.new(object_hash["GlobalId"])
+            guid = BimTools::IfcManager::IfcGloballyUniqueId.new(object_hash["globalId"])
             if parent_guid
               guid.set_parent_guid( parent_guid )
             end
-            object_hash["GlobalId"] = guid.to_json()
+            object_hash["globalId"] = guid.to_json()
 
             # add volume if object is manifold
             if entity.volume > 0
-              object_hash["Volume"] = entity.volume
+              object_hash["volume"] = entity.volume
             end
 
             isDecomposedBy, child_faces = collect_objects(entity.definition.entities, transformation, guid.to_s)
 
             unless isDecomposedBy.empty?
-              object_hash["IsDecomposedBy"] = isDecomposedBy
+              object_hash["isDecomposedBy"] = isDecomposedBy
             end
 
             # only add representation if there are any faces
             if child_faces.length > 0
               obj = OBJ.new(child_faces, parent_transformation)
               representation_guid = BimTools::IfcManager::IfcGloballyUniqueId.new().to_json
-              object_hash["Representations"] = [
+              object_hash["representations"] = [
                 {
-                  "Class": "ShapeRepresentation",
+                  "type": "ShapeRepresentation",
                   "ref": representation_guid
                 }
               ]
@@ -109,14 +119,23 @@ module BimTools
 
               # add geometry as seperate objects at the end of the file
               @geometry << {
-                "Class" => "ShapeRepresentation",
-                "GlobalId" => representation_guid,
-                "RepresentationIdentifier" => "Body",
-                "RepresentationType" => "OBJ",
-                "Items" => [obj.to_s]
+                "type" => "ShapeRepresentation",
+                "globalId" => representation_guid,
+                "representationIdentifier" => "Body",
+                "representationType" => "OBJ",
+                "items" => [obj.to_s]
               }
             end
-            child_objects << object_hash
+            if object_hash["type"]
+              if !@id_objects.include? object_hash["globalId"]
+                @ifc_objects << object_hash
+              end
+              object_hash = {
+                "type" => object_hash["type"],
+                "globalId" => object_hash["globalId"]
+              }
+              child_objects << object_hash
+            end
           elsif entity.is_a?(Sketchup::Face)
             faces << entity
           end
@@ -129,7 +148,16 @@ module BimTools
         definition = entity.definition
         ifc_type = definition.get_attribute "AppliedSchemaTypes", "IFC 2x3"
         if ifc_type
-          properties["Class"] = ifc_type[3..-1]
+
+          # hack to remove IfcWallStandardCase
+          if ifc_type == "IfcWallStandardCase"
+            ifc_type = "IfcWall"
+          end
+
+          # Strip "Ifc" prefix
+          properties["type"] = ifc_type[3..-1]
+
+          # Collect IFC attributes from Sketchup object
           if definition.attribute_dictionaries['IFC 2x3']
             if props_ifc = definition.attribute_dictionaries['IFC 2x3'].attribute_dictionaries
               props_ifc.each do |prop_dict|
@@ -141,7 +169,8 @@ module BimTools
                 if val_dict["value"] && !val_dict["is_hidden"]
                   value = val_dict["value"]
                   if value != "" 
-                    properties[prop_dict.name] = val_dict["value"]
+                    property_name = prop_dict.name[0].downcase + prop_dict.name[1..-1]
+                    properties[property_name] = val_dict["value"]
                   end
                 end
               end
